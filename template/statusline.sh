@@ -48,7 +48,7 @@ build_bar() {
     local filled=$(( pct * width / 100 ))
     local empty=$(( width - filled ))
     local bar_color
-    bar_color=$(color_for_pct "$pct")
+    bar_color="$green"
     local filled_str="" empty_str=""
     for ((i=0; i<filled; i++)); do filled_str+="●"; done
     for ((i=0; i<empty; i++)); do empty_str+="○"; done
@@ -111,34 +111,7 @@ if [ -z "$effort" ]; then
 fi
 [ -z "$effort" ] && effort="default"
 
-# ── Git branch (skip dirty check for speed) ─────────────
-git_branch=""
-git_dirty=""
-if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git_branch=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null)
-    if [ -n "$(git -C "$cwd" status --porcelain 2>/dev/null | head -1)" ]; then
-        git_dirty="*"
-    fi
-fi
-
-# ── Session duration ────────────────────────────────────
-session_duration=""
-if [ -n "$session_start" ] && [ "$session_start" != "null" ]; then
-    start_epoch=$(date -d "$session_start" +%s 2>/dev/null)
-    if [ -n "$start_epoch" ]; then
-        elapsed=$(( now_epoch - start_epoch ))
-        if [ "$elapsed" -ge 3600 ]; then
-            session_duration="$(( elapsed / 3600 ))h$(( (elapsed % 3600) / 60 ))m"
-        elif [ "$elapsed" -ge 60 ]; then
-            session_duration="$(( elapsed / 60 ))m"
-        else
-            session_duration="${elapsed}s"
-        fi
-    fi
-fi
-
 # ── LINE 1 ──────────────────────────────────────────────
-# effort の色 (アイコンは付けず、モデル名の直後に並べる)
 case "$effort" in
     max)    eff_col="$eff_max" ;;
     xhigh)  eff_col="$eff_xhigh" ;;
@@ -149,8 +122,6 @@ case "$effort" in
 esac
 
 line1="${blue}${model_name}${reset}${dim}:${reset}${eff_col}${effort}${reset}${sep}✍️ ${pct_color}${pct_used}%${reset}${sep}${cyan}${dirname}${reset}"
-[ -n "$git_branch" ] && line1+=" ${green}(${git_branch}${red}${git_dirty}${green})${reset}"
-[ -n "$session_duration" ] && line1+="${sep}${dim}⏱ ${reset}${white}${session_duration}${reset}"
 
 # ── Format epoch helper (no subshell) ───────────────────
 fmt_time() { date -d "@$1" +"%H:%M" 2>/dev/null; }
@@ -184,8 +155,7 @@ if [ -n "$five_pct_raw" ] && [ "$five_pct_raw" != "null" ] && [ "$five_pct_raw" 
     five_reset_epoch=$(iso_epoch "$five_iso")
     five_reset=$([ -n "$five_reset_epoch" ] && fmt_time "$five_reset_epoch")
     five_bar=$(build_bar "$five_pct" "$bar_width")
-    five_color=$(color_for_pct "$five_pct")
-    rate_lines+="${white}current${reset} ${five_bar} ${five_color}$(printf '%3d' $five_pct)%${reset}"
+    rate_lines+="${five_bar} ${green}$(printf '%3d' "$five_pct")%${reset}"
     [ -n "$five_reset" ] && rate_lines+=" ${dim}⏰${reset} ${white}${five_reset}${reset}"
 fi
 
@@ -194,9 +164,8 @@ if [ -n "$seven_pct_raw" ] && [ "$seven_pct_raw" != "null" ] && [ "$seven_pct_ra
     seven_reset_epoch=$(iso_epoch "$seven_iso")
     seven_reset=$([ -n "$seven_reset_epoch" ] && fmt_weekly "$seven_reset_epoch")
     seven_bar=$(build_bar "$seven_pct" "$bar_width")
-    seven_color=$(color_for_pct "$seven_pct")
     [ -n "$rate_lines" ] && rate_lines+="\n"
-    rate_lines+="${white}weekly${reset}  ${seven_bar} ${seven_color}$(printf '%3d' $seven_pct)%${reset}"
+    rate_lines+="${seven_bar} ${green}$(printf '%3d' "$seven_pct")%${reset}"
     [ -n "$seven_reset" ] && rate_lines+=" ${dim}⏰${reset} ${white}${seven_reset}${reset}"
 fi
 
@@ -213,54 +182,6 @@ fi
 
 # ── Output ──────────────────────────────────────────────
 printf "%b" "$line1"
-[ -n "$rate_lines" ] && printf "\n\n%b" "$rate_lines"
-
-# ── Background: refresh API cache + dashboard POST ──────
-(
-    cache_age=999
-    if [ -f "$cache_file" ]; then
-        mtime=$(stat -c %Y "$cache_file" 2>/dev/null)
-        [ -n "$mtime" ] && cache_age=$(( now_epoch - mtime ))
-    fi
-    if [ "$cache_age" -gt 60 ]; then
-        token="$CLAUDE_CODE_OAUTH_TOKEN"
-        if [ -z "$token" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
-            token=$(jq -r '.claudeAiOauth.accessToken // empty' "$HOME/.claude/.credentials.json" 2>/dev/null)
-        fi
-        if [ -n "$token" ] && [ "$token" != "null" ]; then
-            response=$(curl -s --max-time 5 \
-                -H "Accept: application/json" \
-                -H "Authorization: Bearer $token" \
-                -H "anthropic-beta: oauth-2025-04-20" \
-                -H "User-Agent: claude-code/2.1.34" \
-                "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-            if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
-                echo "$response" > "$cache_file"
-            fi
-        fi
-    fi
-
-    # ── Optional: local dashboard POST ──────────────────
-    # ローカルで動かしているダッシュボードへメトリクスを送る任意機能。
-    # サーバが無ければ無害に失敗する。不要ならこのブロックを削除してよい。
-    if [ -n "$five_pct_raw" ] && [ "$five_pct_raw" != "null" ] && [ "$five_pct_raw" != "" ]; then
-        five_pct_n=$(printf "%.0f" "$five_pct_raw" 2>/dev/null)
-        five_reset_e=$(date -d "$five_iso" +%s 2>/dev/null)
-        seven_pct_n=$(printf "%.0f" "$seven_pct_raw" 2>/dev/null)
-        seven_reset_e=$(date -d "$seven_iso" +%s 2>/dev/null)
-        payload=$(jq -n \
-            --argjson five "$five_pct_n" --arg fr "${five_reset_e:-}" \
-            --argjson seven "${seven_pct_n:-0}" --arg sr "${seven_reset_e:-}" \
-            '{provider:"claude",source:"claude-statusline",url:"claude-code://statusline",title:"Claude Code statusLine",diagnostic:"Claude Code statusLine rate limits",metrics:[
-                {id:"claude-five-hour",label:"5 hour limit",usedPercentage:$five,resetAt:$fr},
-                {id:"claude-seven-day",label:"7 day limit",usedPercentage:$seven,resetAt:$sr}
-            ]}' 2>/dev/null)
-        [ -n "$payload" ] && curl -sS -m 1 -X POST \
-            -H "content-type: application/json" \
-            --data "$payload" \
-            "http://127.0.0.1:43177/api/ingest" >/dev/null 2>&1 || true
-    fi
-) </dev/null >/dev/null 2>&1 &
-disown 2>/dev/null || true
+[ -n "$rate_lines" ] && printf "\n%b" "$rate_lines"
 
 exit 0

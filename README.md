@@ -1,20 +1,19 @@
 # cc-mac-statusline
 
-macOS 環境の [Claude Code](https://docs.anthropic.com/en/docs/claude-code) で動作する 2 行ステータスラインの設定一式。モデル名・effort レベル・コンテキスト使用率・cwd・git ブランチ・セッション経過時間に加え、5 時間 / 7 日 / extra のレート制限バーをリアルタイム表示する。
+macOS 環境の [Claude Code](https://docs.anthropic.com/en/docs/claude-code) で動作する 2 行ステータスラインの設定一式。モデル名・effort レベル・コンテキスト使用率・cwd に加え、5 時間 / 7 日 / extra のレート制限バーを表示する。
 
 ```
-Opus 4.8:max │ ✍️ 7% │ project (main*) │ ⏱ 1h12m
+Opus 4.8:max │ ✍️ 7% │ project
 
-current ●●●●○○○○○○  46% ⏰ 17:10
-weekly  ●○○○○○○○○○  12% ⏰ 05/10(日) 01:00
-extra   ○○○○○○○○○○ $0.00/$10.00 ⏰ jul 1
+●●●●○○○○○○  46% ⏰ 17:10
+●○○○○○○○○○  12% ⏰ 05/10(日) 01:00
 ```
 
 > Windows 版は [cc-win-statusline](https://github.com/sinoda1114/cc-win-statusline) を参照。
 
 ## なぜ macOS 専用なのか
 
-このスクリプトは `date -d` / `stat -c` という **GNU coreutils 構文** に依存している。macOS 標準の BSD 版 `date` / `stat` はこれらのオプションを解釈できず、レート制限のリセット時刻やキャッシュ鮮度の計算が壊れる。本リポジトリは Homebrew の coreutils（`gdate` / `gstat`）を PATH 先頭に差し込むことでこの問題を回避している。
+このスクリプトは `date -d` / `stat -c` という **GNU coreutils 構文** に依存している。macOS 標準の BSD 版 `date` / `stat` はこれらのオプションを解釈できず、レート制限のリセット時刻計算が壊れる。本リポジトリは Homebrew の coreutils（`gdate` / `gstat`）を PATH 先頭に差し込むことでこの問題を回避している。
 
 ## 動作環境
 
@@ -69,45 +68,26 @@ bash install.sh
 | 要素 | 例 | 説明 |
 |---|---|---|
 | モデル:effort | `Opus 4.8:max` | effort は色温度（max=赤 … low=シアン）で危険度を表現 |
-| ✍️ % | `✍️ 7%` | コンテキストウィンドウ使用率 |
+| ✍️ % | `✍️ 7%` | コンテキストウィンドウ使用率（90%↑赤 / 70%↑黄 / 50%↑橙 / それ以下緑） |
 | ディレクトリ | `project` | cwd の basename |
-| (branch) | `(main*)` | git ブランチ。`*` は未コミット変更あり |
-| ⏱ | `⏱ 1h12m` | セッション経過時間 |
 
 ### 2 行目以降（レート制限）
 
-- `current` … 5 時間枠の使用率とリセット時刻（HH:MM）
-- `weekly` … 7 日枠の使用率とリセット日時（MM/DD(曜日) HH:MM、曜日は日本語）
+- 1 本目 … 5 時間枠の使用率バーとリセット時刻（HH:MM）
+- 2 本目 … 7 日枠の使用率バーとリセット日時（MM/DD(曜日) HH:MM、曜日は日本語）
 - `extra` … extra usage が有効な場合のみ。使用額 / 上限額
 
-バーと数値の色は使用率で変化する（90%↑赤 / 70%↑黄 / 50%↑橙 / それ以下緑）。
+レート制限の値は Claude Code が stdin で渡す `rate_limits` から取得する。無い場合は `/tmp/claude/statusline-usage-cache.json` にフォールバックする。
 
-## 機能と外部通信について（重要）
+## ネットワーク通信について
 
-`statusline.sh` はバックグラウンドで以下の通信を行う。透明性のため明記する。
-
-### 1. Anthropic API へのレート制限取得（主機能）
-
-- エンドポイント: `https://api.anthropic.com/api/oauth/usage`
-- 認証: ローカルの `~/.claude/.credentials.json` から OAuth トークンを読む（または環境変数 `CLAUDE_CODE_OAUTH_TOKEN`）
-- 頻度: ローカルキャッシュ (`/tmp/claude/statusline-usage-cache.json`) が 60 秒以上古い場合のみ
-- 用途: 「current」「weekly」「extra」バーの表示
-- **無効化**: バックグラウンドブロックの当該 `curl` を削除すれば機能停止。1 行目（モデル/cwd/branch）は引き続き動作する
-
-### 2. ローカルダッシュボードへの POST（オプション）
-
-- エンドポイント: `http://127.0.0.1:43177/api/ingest`
-- 用途: ローカルで動かしているダッシュボードサーバへのメトリクス送信（任意機能）
-- サーバが起動していなければ無害に失敗する
-- **無効化**: スクリプト末尾の "Optional: local dashboard POST" ブロックを削除
-
-どちらも外部の第三者サーバには送信しない（Anthropic の自分のアカウント情報取得のみ）。
+このスクリプトは**外部へのネットワーク通信を一切行わない**。表示する値はすべて Claude Code から渡される stdin の JSON と、ローカルキャッシュファイルから読み取る。
 
 ## 技術メモ
 
 ### GNU coreutils 依存
 
-`date -d "<ISO or @epoch>"` と `stat -c %Y` を多用している。BSD 版は構文が異なるため、PATH 先頭に gnubin を差し込んで GNU 版を強制している。これがこのリポジトリが Windows 版と分かれている主因。
+`date -d "<ISO or @epoch>"` と `stat -c %Y` を使う。BSD 版は構文が異なるため、PATH 先頭に gnubin を差し込んで GNU 版を強制している。これがこのリポジトリが Windows 版と分かれている主因。
 
 ### bash の IFS=$'\t' read で空フィールドが圧縮される
 
